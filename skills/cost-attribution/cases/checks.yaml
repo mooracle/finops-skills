@@ -1,0 +1,84 @@
+# The checks (references/reconciliation-ops.md; article Part 2).
+
+cases:
+
+- name: a row with no money stops the run
+  bad_input: true
+  given:
+    bill:
+    - {effectivecost: 10.0}
+    - {effectivecost: null, billedcost: null, listcost: null}
+  expect:
+    stops: {check: totals, problems: [unloadable_rows]}
+
+- name: a row with non-finite money stops the run
+  bad_input: true
+  given:
+    bill:
+    - {effectivecost: 10.0}
+    - {effectivecost: .nan}
+  expect:
+    stops: {check: totals, includes: [unloadable_rows, bad_money]}
+
+- name: a row with no currency stops the run
+  bad_input: true
+  given:
+    bill:
+    - {effectivecost: 10.0}
+    - {currency: null}
+  expect:
+    stops: {check: totals, problems: [unloadable_rows]}
+
+- name: a row with no start stops the run
+  bad_input: true
+  given:
+    bill:
+    - {effectivecost: 10.0}
+    - {chargeperiodstart: null}
+  expect:
+    stops: {check: totals, problems: [unloadable_rows]}
+
+- name: two currencies in one provider-month stop the run
+  given:
+    bill:
+    - {effectivecost: 10.0}
+    - {effectivecost: 10.0, currency: EUR}
+  expect:
+    stops: {check: totals, problems: [currencies]}
+
+# from Phase 4: needs services_monthly
+- name: a lookup key published twice stops the run but clears nothing, even when only the count shows it
+  given:
+    bill:
+    - {chargecategory: Usage, effectivecost: 100.0}
+    - {chargecategory: Credit, effectivecost: -100.0}
+    rules_lookup:
+    - {servicename: amazon ec2, team: payments}
+    - {servicename: amazon ec2, team: payments}
+  expect:
+    stops: {check: views, problems: [view_rows_off_base]}
+    base_monthly: {by: chargecategory, sums: {Usage: 100.0, Credit: -100.0}}
+
+# Phase 5: the invoice check
+- name: the invoice check sums raw BilledCost per invoice, every charge category included
+  run: false
+  given:
+    aws_focus:
+    - {invoiceid: INV-1, chargecategory: Usage, billedcost: 100.0}
+    - {invoiceid: INV-1, chargecategory: Credit, billedcost: -10.0}
+    - {invoiceid: INV-1, chargecategory: Tax, billedcost: 18.0}
+    - {invoiceid: INV-2, chargecategory: Purchase, billedcost: 1200.0, effectivecost: 0.0}
+    - {invoiceid: INV-3, chargecategory: Usage, billedcost: 50.0}
+    invoice_totals:
+    - {provider: aws, billing_period: "2026-04", invoice: INV-1, currency: USD, amount: 108.0}
+    - {provider: aws, billing_period: "2026-04", invoice: INV-2, currency: USD, amount: 1000.0}
+    - {provider: aws, billing_period: "2026-04", invoice: INV-4, currency: USD, amount: 75.0}
+  expect:
+    report:
+      name: invoice_check
+      params: {BILLING_PERIOD: "2026-04", PROVIDER: aws, TOLERANCE: 0.01}
+      rows:
+      - {problem: invoice_off, subject: INV-2, billed: 1200.0, invoiced: 1000.0}
+      - {problem: invoice_missing, subject: INV-3, billed: 50.0, invoiced: null}
+      - {problem: invoice_not_on_bill, subject: INV-4, billed: null, invoiced: 75.0}
+

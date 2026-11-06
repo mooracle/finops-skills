@@ -1,0 +1,301 @@
+# The rules engine (references/rules-engine.md; article Part 4), as data. Each case has
+# one `kind`:
+#
+#   pattern   a match pattern against a value: matches or not
+#   decide    rules and one resource: which rule wins, or which rules conflict
+#   expand    rules and resources: the lookup rows (team per resource), the unmatched
+#   merge     a published lookup and a fresh one: what gets published
+#   review    published + fresh + recent costs: what the PR summary reports as moves,
+#             and as flows between teams, per currency; `kept` (empty when left out) is
+#             the published rows no fresh row replaces, which no rule matches any more;
+#             a non-empty `kept` means the review exits non-zero and the PR fails
+#   key       a tuple: its lookup_key, exactly ("\x1f" is chr(31))
+#   check     one rule: the match fields `rules check` refuses, before anything expands
+#
+# Resources and lookup rows are tuples of the key fields (provider, subaccountid,
+# x_resourcegroupname, x_namespace, servicename, tag_costcenter) plus subaccountname;
+# missing fields are NULL, except provider in merge and review rows, which is aws, and
+# a review cost's currency, which is USD. A case's `outputs` is the profile's
+# categories.outputs; without it, team, app and environment.
+
+cases:
+
+# --- patterns
+- {kind: pattern, name: exact any case, pattern: Amazon S3, value: amazon s3, matches: true}
+- {kind: pattern, name: exact is the whole value, pattern: Amazon S3, value: Amazon S3 Glacier, matches: false}
+- {kind: pattern, name: prefix wildcard, pattern: "payments-*", value: Payments-Ledger-Prod, matches: true}
+- {kind: pattern, name: suffix wildcard, pattern: "*-prod", value: payments-ledger-prod, matches: true}
+- {kind: pattern, name: contains wildcard, pattern: "*ledger*", value: payments-ledger-prod, matches: true}
+- {kind: pattern, name: mid-string wildcard, pattern: "prod-*-eu", value: prod-search-eu, matches: true}
+- {kind: pattern, name: wildcard covers the whole value, pattern: "prod-*-eu", value: prod-search-eu-2, matches: false}
+- {kind: pattern, name: one-character wildcard, pattern: "acct-?", value: acct-7, matches: true}
+- {kind: pattern, name: anchored regex, pattern: "^payments-.*-prod$", value: PAYMENTS-LEDGER-PROD, matches: true}
+- {kind: pattern, name: prefix regex, pattern: "^payments-", value: payments-ledger-dev, matches: true}
+- {kind: pattern, name: suffix regex, pattern: "-dev$", value: payments-ledger-dev, matches: true}
+- {kind: pattern, name: "a regex keeps its meaning: \\D is not a digit", pattern: "^acct-\\D+$", value: acct-abc, matches: true}
+- {kind: pattern, name: "\\D still rejects digits", pattern: "^acct-\\D+$", value: acct-123, matches: false}
+- {kind: pattern, name: parentheses alone are exact, pattern: AWS Support (Enterprise), value: aws support (enterprise), matches: true}
+
+# --- deciding one resource
+- kind: decide
+  name: the narrowest field wins, whatever the order
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {ServiceName: Amazon S3}, team: storage}
+  - {match: {x_namespace: "prod/*"}, team: platform}
+  resource: {subaccountname: payments-ledger, servicename: Amazon S3, x_namespace: prod/pikachu}
+  winner: platform
+
+- kind: decide
+  name: a service rule beats an account rule
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {ServiceName: Amazon S3}, team: storage}
+  resource: {subaccountname: payments-ledger, servicename: Amazon S3}
+  winner: storage
+
+- kind: decide
+  name: a resource-group rule beats a service rule
+  rules:
+  - {match: {ServiceName: Amazon S3}, team: storage}
+  - {match: {SubAccountName: shared-prod, x_ResourceGroupName: "rg-payments-*"}, team: payments}
+  resource: {subaccountname: shared-prod, x_resourcegroupname: rg-payments-api, servicename: Amazon S3}
+  winner: payments
+
+- kind: decide
+  name: on the same narrowest field, the next field decides
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {SubAccountName: "payments-l*", Provider: aws}, team: ledger}
+  resource: {provider: aws, subaccountname: payments-ledger}
+  winner: ledger
+
+- kind: decide
+  name: an exact value beats a pattern on the same field
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {SubAccountName: payments-ledger-prod}, team: data}
+  resource: {subaccountname: payments-ledger-prod}
+  winner: data
+
+- kind: decide
+  name: an exact value on a broader field doesn't beat a pattern on a narrower one
+  rules:
+  - {match: {SubAccountName: payments-ledger-prod}, team: data}
+  - {match: {ServiceName: "Amazon S*"}, team: storage}
+  resource: {subaccountname: payments-ledger-prod, servicename: Amazon S3}
+  winner: storage
+
+- kind: decide
+  name: a list ranks by the element that matched
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {SubAccountName: ["payments-ledger-prod", "shop-*"]}, team: data}
+  resource: {subaccountname: payments-ledger-prod}
+  winner: data
+
+- kind: decide
+  name: equally specific rules that disagree are a conflict
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {SubAccountName: "*-ledger"}, team: finance}
+  resource: {subaccountname: payments-ledger}
+  conflict: [1, 2]
+
+- kind: decide
+  name: equally specific rules are a conflict even when they agree
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {SubAccountName: "*-ledger"}, team: payments}
+  resource: {subaccountname: payments-ledger}
+  conflict: [1, 2]
+
+- kind: decide
+  name: a regex and a wildcard rank the same
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments}
+  - {match: {SubAccountName: "^payments-ledger-"}, team: data}
+  resource: {subaccountname: payments-ledger-prod}
+  conflict: [1, 2]
+
+- kind: decide
+  name: every field in a match must match
+  rules:
+  - {match: {SubAccountName: "payments-*", ServiceName: Amazon S3}, team: data}
+  resource: {subaccountname: payments-ledger, servicename: Amazon EC2}
+  winner: null
+
+- kind: decide
+  name: a list of patterns matches if any one does
+  rules:
+  - {match: {SubAccountName: [payments-ledger-prod, "^search-"]}, team: search}
+  resource: {subaccountname: search-indexer-dev}
+  winner: search
+
+- kind: decide
+  name: a missing field reads as empty, which a wildcard matches
+  rules:
+  - {match: {x_namespace: "*"}, team: plain}
+  resource: {servicename: Amazon EC2}
+  winner: plain
+
+- kind: decide
+  name: a tag rule reads the folded tag column
+  rules:
+  - {match: {"Tag:Cost-Center": cc-7}, team: search}
+  resource: {tag_costcenter: CC-7}
+  winner: search
+
+- kind: decide
+  # expansion also warns here: the rule it beat sets categories the winner leaves out
+  name: the winner's categories are all there is; a broader rule's never fill in
+  rules:
+  - {match: {SubAccountName: "payments-*"}, team: payments, app: ledger, environment: Production}
+  - {match: {x_namespace: "prod/*"}, team: platform}
+  resource: {subaccountname: payments-ledger, x_namespace: prod/reconcile}
+  winner: platform
+  categories: {team: platform, app: Unallocated, environment: Unallocated}
+
+- kind: decide
+  name: a category a rule leaves out is Unallocated
+  rules:
+  - {match: {Provider: aws}, team: payments}
+  resource: {provider: aws}
+  winner: payments
+  categories: {team: payments, app: Unallocated, environment: Unallocated}
+
+- kind: decide
+  name: the categories are the profile's outputs, whatever finance calls them
+  outputs: [team, product]
+  rules:
+  - {match: {SubAccountName: "search-*"}, team: search, product: catalog}
+  resource: {subaccountname: search-eu}
+  winner: search
+  categories: {team: search, product: catalog}
+
+# --- rule checks: a rule matches key fields and names only
+- kind: check
+  name: a FOCUS column outside the key is refused
+  rule: {match: {Provider: aws, RegionId: us-east-2}, team: platform}
+  refused: [RegionId]
+
+- kind: check
+  name: a tag the adapters don't turn into a column is refused
+  rule: {match: {Tag:Owner: payments}, team: payments}
+  refused: [Tag:Owner]
+
+- kind: check
+  name: key fields, names and any spelling of a routed tag are accepted
+  rule: {match: {SubAccountName: "payments-*", servicename: Amazon S3, Tag:cost-center: cc-7,
+                 x_namespace: "prod/*"}, team: payments}
+  refused: []
+
+- kind: check
+  name: an unanchored regex is refused
+  rule: {match: {SubAccountName: "payments-.*"}, team: payments}
+  refused: [SubAccountName]
+
+- kind: check
+  name: a regex that doesn't compile is refused
+  rule: {match: {SubAccountName: "^pay-(eu$"}, team: payments}
+  refused: [SubAccountName]
+
+# --- expansion: the article's animation (Part 4)
+- kind: expand
+  name: walk every resource down the rules; the one no rule matches is not written
+  rules:
+  - {match: {SubAccountName: pay-eu, ServiceName: Amazon S3}, team: data}
+  - {match: {SubAccountName: "pay-*"}, team: payments}
+  - {match: {SubAccountName: "search-*"}, team: search}
+  resources:
+  - {provider: aws, subaccountid: "101", subaccountname: pay-eu, servicename: amazon ec2}
+  - {provider: aws, subaccountid: "101", subaccountname: pay-eu, servicename: amazon s3}
+  - {provider: aws, subaccountid: "102", subaccountname: pay-us, servicename: amazon ec2}
+  - {provider: aws, subaccountid: "201", subaccountname: search-eu, servicename: amazon rds}
+  - {provider: aws, subaccountid: "900", subaccountname: sandbox, servicename: amazon ec2}
+  lookup:
+  - {subaccountid: "101", servicename: amazon ec2, team: payments}
+  - {subaccountid: "101", servicename: amazon s3, team: data}
+  - {subaccountid: "102", servicename: amazon ec2, team: payments}
+  - {subaccountid: "201", servicename: amazon rds, team: search}
+  unmatched: [{subaccountid: "900"}]
+
+# --- the history merge: add or replace, never remove
+- kind: merge
+  name: a fresh row replaces, a missing one is kept
+  published:
+  - {subaccountid: "101", servicename: amazon ec2, team: payments}
+  - {subaccountid: "102", servicename: amazon ec2, team: search}
+  fresh:
+  - {subaccountid: "101", servicename: amazon ec2, team: data}
+  result:
+  - {subaccountid: "101", team: data}
+  - {subaccountid: "102", team: search}
+
+- kind: merge
+  name: a fresh lookup with no rows changes nothing
+  published: [{subaccountid: "101", servicename: amazon ec2, team: payments}]
+  fresh: []
+  result: [{subaccountid: "101", team: payments}]
+
+- kind: merge
+  name: a new key field is a migration, not a merge
+  published_without: [tag_costcenter]
+  published: [{subaccountid: "101", servicename: amazon ec2, team: payments}]
+  fresh: [{subaccountid: "101", servicename: amazon ec2, team: payments}]
+  refused: migration
+
+# --- the PR review
+- kind: review
+  name: moves and newly allocated count; agreeing rows don't; a row no rule produces is kept, and fails the PR
+  published:
+  - {subaccountid: "101", servicename: amazon s3, team: payments}
+  - {subaccountid: "101", servicename: amazon ec2, team: payments}
+  - {subaccountid: "999", servicename: amazon ec2, team: search}
+  fresh:
+  - {subaccountid: "101", servicename: amazon s3, team: data}
+  - {subaccountid: "101", servicename: amazon ec2, team: payments}
+  - {subaccountid: "103", servicename: amazon ec2, team: payments}
+  costs:
+  - {subaccountid: "101", servicename: amazon s3, recent_cost: 80.0}
+  - {subaccountid: "103", servicename: amazon ec2, recent_cost: 300.0}
+  moves:
+  - {from: Unallocated, to: payments, cost: 300.0, currency: USD}
+  - {from: payments, to: data, cost: 80.0, currency: USD}
+  kept:
+  - {subaccountid: "999", servicename: amazon ec2, team: search}
+
+- kind: review
+  name: a rule that says Unallocated moves nothing
+  published: []
+  fresh: [{subaccountid: "103", servicename: amazon ec2, team: Unallocated}]
+  costs: [{subaccountid: "103", servicename: amazon ec2, recent_cost: 100.0}]
+  moves: []
+
+- kind: review
+  name: costs in two currencies are never added together
+  published: []
+  fresh:
+  - {subaccountid: "101", servicename: amazon ec2, team: payments}
+  - {provider: azure, subaccountid: sub-1, servicename: virtual machines, team: payments}
+  costs:
+  - {subaccountid: "101", servicename: amazon ec2, recent_cost: 100.0, currency: USD}
+  - {provider: azure, subaccountid: sub-1, servicename: virtual machines, recent_cost: 100.0,
+     currency: EUR}
+  moves:
+  - {from: Unallocated, to: payments, cost: 100.0, currency: USD}
+  - {from: Unallocated, to: payments, cost: 100.0, currency: EUR}
+  flows:
+  - {from: Unallocated, to: payments, cost: 100.0, currency: EUR}
+  - {from: Unallocated, to: payments, cost: 100.0, currency: USD}
+
+# --- the key recipe, which the views rebuild in SQL
+- kind: key
+  name: fields in order, NULL as empty, chr(31) between, ASCII lowercased
+  tuple: {provider: AWS, subaccountid: "101", servicename: Amazon EC2, tag_costcenter: CC-7}
+  key: "aws\x1f101\x1f\x1f\x1famazon ec2\x1fcc-7"
+
+- kind: key
+  name: non-ASCII letters keep their case on both sides
+  tuple: {provider: aws, tag_costcenter: "İ-Ö"}
+  key: "aws\x1f\x1f\x1f\x1f\x1fİ-Ö"

@@ -1,0 +1,261 @@
+# Adapters (references/providers.md): raw provider rows in, contract rows out, for one
+# set of raw shapes and one profile's choices. To port them, see references/testing.md.
+
+cases:
+
+- name: "AWS: only the profile's charge categories load; this profile leaves tax out"
+  given:
+    aws_focus:
+    - {chargecategory: Usage, effectivecost: 100.0}
+    - {chargecategory: Purchase, effectivecost: 50.0}
+    - {chargecategory: Credit, effectivecost: -20.0}
+    - {chargecategory: Tax, effectivecost: 30.0}
+  run: false
+  expect:
+    adapter:aws: {sum: 130.0, count: 3}
+
+- name: "AWS: a tag spelled three ways is one column"
+  given:
+    aws_focus:
+    - {tags: {CostCenter: cc-7}, effectivecost: 1.0}
+    - {tags: {costcenter: cc-7}, effectivecost: 2.0}
+    - {tags: {cost-center: cc-7}, effectivecost: 4.0}
+  run: false
+  expect:
+    adapter:aws: {where: {tag_costcenter: cc-7}, sum: 7.0}
+
+- name: "AWS: Enterprise Support is marked as the shared charge 'support'"
+  given:
+    aws_focus: [{servicename: AWS Support (Enterprise)}]
+  run: false
+  expect:
+    adapter:aws: {rows: [{shared_cost: support, first_party: true}]}
+
+- name: "AWS: a Marketplace resale is not first-party"
+  given:
+    aws_focus: [{publishername: Metrics Co}]
+  run: false
+  expect:
+    adapter:aws: {rows: [{first_party: false, publishername: Metrics Co}]}
+
+- name: "AWS: a Bedrock model its maker sells counts as AWS's own"
+  given:
+    aws_focus:
+    - {publishername: Model Co, servicename: Model Co Large (Amazon Bedrock Edition)}
+    - {publishername: Model Co, resourceid: "arn:aws:bedrock:eu-west-1::foundation-model/modelco.large-v1"}
+  run: false
+  expect:
+    adapter:aws: {rows: [{first_party: true}, {first_party: true}]}
+
+- name: "AWS: unused commitment hours get a service name of their own and keep their account"
+  given:
+    aws_focus:
+    - {servicename: Savings Plans for AWS Compute usage, commitmentdiscountstatus: Unused,
+       billedcost: 0.0, effectivecost: 7.0}
+    - {commitmentdiscountstatus: Used}
+  run: false
+  expect:
+    adapter:aws:
+      rows:
+      - {servicename: Unused commitment, subaccountid: acct-1, effectivecost: 7.0}
+      - {servicename: Amazon EC2}
+
+- name: "AWS: Kubernetes tags on VMs, load balancers and CSI volumes"
+  given:
+    aws_focus:
+    - {tags: {"eks:cluster-name": prod, "eks:nodegroup-name": G}}
+    - {tags: {"elbv2.k8s.aws/cluster": prod, "ingress.k8s.aws/stack": snorlax/web}}
+    - {tags: {KubernetesCluster: prod, "kubernetes.io/created-for/pvc/namespace": eevee}}
+  run: false
+  expect:
+    adapter:aws:
+      rows:
+      - {k8s_cluster: prod, k8s_pool: G, k8s_namespace: null}
+      - {k8s_cluster: prod, k8s_pool: null, k8s_namespace: snorlax}
+      - {k8s_cluster: prod, k8s_pool: null, k8s_namespace: eevee}
+
+- name: "AWS: the AWS-generated cluster tag names a node however it was launched"
+  given:
+    aws_focus:
+    - {tags: {"aws:eks:cluster-name": prod, "karpenter.sh/nodepool": G}}
+  run: false
+  expect:
+    adapter:aws: {rows: [{k8s_cluster: prod}]}
+
+- name: "AWS: a cluster named in a tag key or only in the control plane's ARN"
+  given:
+    aws_focus:
+    - {tags: {"kubernetes.io/cluster/prod": owned, "kubernetes.io/created-for/pvc/namespace": eevee}}
+    - {tags: {"kubernetes.io/cluster/prod": shared}}
+    - {servicename: Amazon Elastic Kubernetes Service,
+       resourceid: "arn:aws:eks:eu-west-1:123456789012:cluster/prod"}
+    - {resourceid: "arn:aws:ec2:eu-west-1:123456789012:instance/i-0abc"}
+  run: false
+  expect:
+    adapter:aws:
+      rows:
+      - {k8s_cluster: prod, k8s_namespace: eevee}
+      - {k8s_cluster: null, k8s_namespace: null}
+      - {k8s_cluster: prod, k8s_namespace: null}
+      - {k8s_cluster: null, k8s_namespace: null}
+
+- name: "Azure: ISO timestamps and JSON tags, in the billing currency"
+  given:
+    azure_focus:
+    - {chargeperiodstart: "2026-04-09T00:00:00Z", chargeperiodend: "2026-04-10T00:00:00Z",
+       effectivecost: 500.0, x_effectivecostinusd: 48.0, tags: '{"CostCenter": "cc-42"}'}
+  run: false
+  expect:
+    adapter:azure:
+      rows: [{chargeperiodstart: 2026-04-09T00:00:00, effectivecost: 500.0, currency: EUR,
+              tag_costcenter: cc-42, x_resourcegroupname: rg-web}]
+
+- name: "Azure: an unused commitment row with no subscription goes on the billing account"
+  given:
+    azure_focus:
+    - {subaccountid: "", subaccountname: Unassigned, servicename: Azure Savings Plan for Compute,
+       commitmentdiscountstatus: Unused}
+  run: false
+  expect:
+    adapter:azure:
+      rows: [{servicename: Unused commitment, subaccountid: ea-1, subaccountname: enrollment-1}]
+
+- name: "Azure: an export that leaves the status empty still finds its unused rows"
+  given:
+    azure_focus:
+    - {subaccountid: "", subaccountname: Unassigned,
+       commitmentdiscountid: /providers/Microsoft.Capacity/reservationOrders/r-1/reservations/x,
+       resourceid: /providers/microsoft.capacity/reservationorders/r-1/reservations/x}
+    - {resourceid: vm-1,
+       commitmentdiscountid: /providers/Microsoft.Capacity/reservationOrders/r-1/reservations/x}
+  run: false
+  expect:
+    adapter:azure:
+      rows:
+      - {servicename: Unused commitment, subaccountid: ea-1}
+      - {servicename: Virtual Machines, subaccountid: sub-1}
+
+- name: "Azure: reporting in USD reads the USD columns"
+  variants: {azure: usd}
+  given:
+    azure_focus: [{effectivecost: 500.0, x_effectivecostinusd: 48.0}]
+  run: false
+  expect:
+    adapter:azure: {rows: [{effectivecost: 48.0, currency: USD}]}
+
+- name: "Google Cloud: labels from one map, no service category, credits inside the cost"
+  given:
+    gcp_focus:
+    - {chargecategory: Usage, effectivecost: 100.0,
+       tags: {costcenter: cc-7, goog-k8s-cluster-name: prod, goog-k8s-node-pool-name: G,
+              k8s-namespace: pikachu}}
+    - {chargecategory: Adjustment, effectivecost: -10.0}
+    - {chargecategory: Tax, effectivecost: 20.0}
+  run: false
+  expect:
+    adapter:gcp:
+      rows:
+      - {effectivecost: 100.0, currency: EUR, servicecategory: null, tag_costcenter: cc-7,
+         k8s_cluster: prod, k8s_pool: G, k8s_namespace: pikachu}
+      - {effectivecost: -10.0, currency: EUR}
+
+- name: "Google Cloud: reporting in USD divides by the conversion rate"
+  variants: {gcp: usd}
+  given:
+    gcp_focus: [{effectivecost: 100.0, x_currencyconversionrate: 0.8}]
+  run: false
+  expect:
+    adapter:gcp: {rows: [{effectivecost: 125.0, currency: USD}]}
+
+- name: "Google Cloud: a missing rate gives no money rather than a wrong one"
+  variants: {gcp: usd}
+  given:
+    gcp_focus: [{effectivecost: 100.0, x_currencyconversionrate: null}]
+  run: false
+  expect:
+    adapter:gcp: {rows: [{effectivecost: null, currency: USD}]}
+
+- name: "Google Cloud: a rate of zero or below gives no money rather than an erased or reversed one"
+  variants: {gcp: usd}
+  given:
+    gcp_focus:
+    - {effectivecost: 100.0, x_currencyconversionrate: 0.0}
+    - {effectivecost: 100.0, x_currencyconversionrate: -0.8}
+  run: false
+  expect:
+    adapter:gcp: {rows: [{effectivecost: null}, {effectivecost: null}]}
+
+- name: "Directly billed: the invoice is the bill, never first-party"
+  given:
+    saas_focus: [{effectivecost: 200.0}]
+  run: false
+  expect:
+    adapter:other: {rows: [{provider: other, effectivecost: 200.0, first_party: false, publishername: Forms Co}]}
+
+- name: "AWS: reporting in EUR converts USD rows through the org's rate table"
+  variants: {aws: fx}
+  given:
+    fx_rates: [{from_currency: USD, to_currency: EUR, rate: 0.9}]
+    aws_focus:
+    - {effectivecost: 100.0}
+    - {effectivecost: 50.0, billingcurrency: EUR}
+  run: false
+  expect:
+    adapter:aws:
+      rows:
+      - {effectivecost: 90.0, currency: EUR}
+      - {effectivecost: 50.0, currency: EUR}
+
+- name: "AWS: a month with no rate gives no money rather than an unconverted one"
+  variants: {aws: fx}
+  given:
+    aws_focus: [{effectivecost: 100.0}]
+  run: false
+  expect:
+    adapter:aws: {rows: [{effectivecost: null, currency: EUR}]}
+
+- name: "AWS: a rate pasted twice converts once; two different rates give no money"
+  variants: {aws: fx}
+  given:
+    fx_rates:
+    - {from_currency: USD, to_currency: EUR, rate: 0.9}
+    - {from_currency: USD, to_currency: EUR, rate: 0.9}
+    - {billing_period: "2026-03", from_currency: USD, to_currency: EUR, rate: 0.9}
+    - {billing_period: "2026-03", from_currency: USD, to_currency: EUR, rate: 0.8}
+    aws_focus:
+    - {effectivecost: 100.0}
+    - {billing_period: "2026-03", effectivecost: 100.0}
+  run: false
+  expect:
+    adapter:aws:
+      rows:
+      - {billing_period: "2026-04", effectivecost: 90.0}
+      - {billing_period: "2026-03", effectivecost: null}
+
+- name: "AWS: a rate that isn't a positive number gives no money rather than an erased or reversed month"
+  variants: {aws: fx}
+  given:
+    fx_rates:
+    - {billing_period: "2026-04", from_currency: USD, to_currency: EUR, rate: 0.0}
+    - {billing_period: "2026-03", from_currency: USD, to_currency: EUR, rate: -1.0}
+    - {billing_period: "2026-02", from_currency: USD, to_currency: EUR, rate: .nan}
+    aws_focus:
+    - {billing_period: "2026-04", effectivecost: 100.0}
+    - {billing_period: "2026-03", effectivecost: 100.0}
+    - {billing_period: "2026-02", effectivecost: 100.0}
+  run: false
+  expect:
+    adapter:aws:
+      rows:
+      - {billing_period: "2026-04", effectivecost: null}
+      - {billing_period: "2026-03", effectivecost: null}
+      - {billing_period: "2026-02", effectivecost: null}
+
+- name: "AWS: a month whose rate is zero stops the run instead of loading nothing"
+  variants: {aws: fx}
+  bad_input: true
+  given:
+    fx_rates: [{from_currency: USD, to_currency: EUR, rate: 0.0}]
+    aws_focus: [{effectivecost: 100.0}]
+  expect:
+    stops: {check: totals, includes: [unloadable_rows]}

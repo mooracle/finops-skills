@@ -1,0 +1,134 @@
+# Fair-share (references/splitters.md; article Part 3).
+
+cases:
+
+- name: support splits by each account's spend
+  given:
+    bill:
+    - {subaccountid: acct-a, effectivecost: 600.0}
+    - {subaccountid: acct-b, effectivecost: 300.0}
+    - {subaccountid: acct-c, effectivecost: 100.0}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support, effectivecost: 200.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      by: subaccountid
+      sums: {acct-a: 120.0, acct-b: 60.0, acct-c: 20.0}
+    base_daily: {sum: 1200.0}
+
+- name: resold spend, credits and refunded accounts earn no share
+  given:
+    bill:
+    - {subaccountid: acct-a, effectivecost: 600.0}
+    - {subaccountid: acct-b, effectivecost: 400.0, publishername: Metrics Co, first_party: false}
+    - {subaccountid: acct-c, effectivecost: 100.0}
+    - {subaccountid: acct-c, effectivecost: -150.0, chargecategory: Credit}
+    - {subaccountid: acct-d, effectivecost: -10.0}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support, effectivecost: 70.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      by: subaccountid
+      sums: {acct-a: 60.0, acct-c: 10.0}
+
+- name: a model its maker sells on Bedrock earns its share like AWS's own spend
+  given:
+    bill:
+    - {subaccountid: acct-a, effectivecost: 100.0}
+    - {subaccountid: acct-b, effectivecost: 100.0, publishername: Model Co, first_party: true}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support, effectivecost: 20.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      by: subaccountid
+      sums: {acct-a: 10.0, acct-b: 10.0}
+
+- name: tax, adjustments and other shared charges earn no share
+  run: {shared_costs: [support, network]}
+  given:
+    bill:
+    - {subaccountid: acct-a, effectivecost: 100.0}
+    - {subaccountid: acct-a, effectivecost: 50.0, chargecategory: Adjustment}
+    - {subaccountid: acct-b, effectivecost: 100.0}
+    - {subaccountid: acct-b, effectivecost: 100.0, chargecategory: Tax}
+    - {subaccountid: acct-net, servicename: Network Hub, shared_cost: network, effectivecost: 300.0}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support, effectivecost: 60.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      rows: [{subaccountid: acct-a, effectivecost: 30.0}, {subaccountid: acct-b, effectivecost: 30.0}]
+
+- name: each payer splits its own support
+  given:
+    bill:
+    - {billingaccountid: payer-1, subaccountid: acct-a, effectivecost: 100.0}
+    - {billingaccountid: payer-2, subaccountid: acct-b, effectivecost: 100.0}
+    - {billingaccountid: payer-1, subaccountid: acct-payer, servicename: AWS Support (Enterprise),
+       shared_cost: support, effectivecost: 50.0}
+    - {billingaccountid: payer-2, subaccountid: acct-payer, servicename: AWS Support (Enterprise),
+       shared_cost: support, effectivecost: 70.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      by: [billingaccountid, subaccountid]
+      sums: {"payer-1 / acct-a": 50.0, "payer-2 / acct-b": 70.0}
+
+- name: a payer with no account to split over keeps its support whole
+  given:
+    bill:
+    - {billingaccountid: payer-1, subaccountid: acct-a, effectivecost: 100.0}
+    - {billingaccountid: payer-3, subaccountid: acct-m, effectivecost: 80.0,
+       publishername: Metrics Co, first_party: false}
+    - {billingaccountid: payer-3, subaccountid: acct-payer, servicename: AWS Support (Enterprise),
+       shared_cost: support, effectivecost: 40.0}
+  expect:
+    base_monthly:
+      where: {billingaccountid: payer-3, servicename: AWS Support (Enterprise)}
+      rows: [{subaccountid: acct-payer, effectivecost: 40.0, split_by: null}]
+
+- name: the daily split follows the monthly weights
+  given:
+    bill:
+    - {subaccountid: acct-a, effectivecost: 750.0}
+    - {subaccountid: acct-b, effectivecost: 250.0}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support,
+       effectivecost: 300.0, chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_daily:
+      where: {subaccountid: acct-a, split_by: "share:support"}
+      count: 30
+      sum: 225.0
+
+- name: the split rows carry the target account's latest name
+  given:
+    bill:
+    - {subaccountid: acct-a, subaccountname: old-name,
+       chargeperiodstart: 2026-04-02T00:00:00, chargeperiodend: 2026-04-03T00:00:00}
+    - {subaccountid: acct-a, subaccountname: new-name,
+       chargeperiodstart: 2026-04-09T00:00:00, chargeperiodend: 2026-04-10T00:00:00}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support, effectivecost: 20.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      rows: [{subaccountname: new-name, effectivecost: 20.0}]
+
+- name: a target account with no name gets none, never the payer's
+  # a name rule on the payer's name must not catch the target's share
+  given:
+    bill:
+    - {subaccountid: acct-a, subaccountname: null, effectivecost: 100.0}
+    - {subaccountid: acct-payer, subaccountname: payer-root, servicename: AWS Support (Enterprise),
+       shared_cost: support, effectivecost: 20.0}
+  expect:
+    base_monthly:
+      where: {split_by: "share:support"}
+      rows: [{subaccountid: acct-a, subaccountname: null, effectivecost: 20.0}]
+
+- name: a shared charge the profile doesn't list stops the run
+  run: {shared_costs: [aws-enterprise-support]}
+  given:
+    bill:
+    - {subaccountid: acct-a, effectivecost: 100.0}
+    - {subaccountid: acct-payer, servicename: AWS Support (Enterprise), shared_cost: support, effectivecost: 40.0}
+  expect:
+    stops: {check: weights, problems: [shared_cost_not_configured]}

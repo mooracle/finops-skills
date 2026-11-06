@@ -1,0 +1,165 @@
+# What an unremarkable row of each table looks like. A case names only the columns
+# its point is about; everything else comes from here.
+#
+# Two conveniences every runner applies (references/testing.md has the format):
+#   - a bill row that gives effectivecost but not billedcost or listcost gets the
+#     same amount in those;
+#   - timestamps are UTC; dates are plain dates.
+#
+# `bill` is the adapter contract (references/providers.md).
+
+run:
+  period: "2026-04"
+  provider: aws
+  today: "2026-05-10"          # April is over
+  shared_costs: [support]
+  tolerance: 0.01              # the totals check's tolerance, in currency units
+
+bill:
+  provider: aws
+  billing_period: "2026-04"
+  billingaccountid: payer-1
+  subaccountid: acct-1
+  subaccountname: shop-prod
+  regionid: eu-west-1
+  servicename: Amazon EC2
+  servicecategory: Compute
+  chargecategory: Usage
+  pricingcategory: Standard
+  x_resourcegroupname: null
+  tag_costcenter: null
+  chargeperiodstart: 2026-04-07T00:00:00
+  chargeperiodend: 2026-04-08T00:00:00
+  billedcost: 10.0
+  effectivecost: 10.0
+  listcost: 10.0
+  currency: USD
+  publishername: Amazon Web Services, Inc.
+  first_party: true
+  shared_cost: null
+  k8s_cluster: null
+  k8s_pool: null
+  k8s_namespace: null
+
+vendor_registry: {vendor: null, provider: aws, publisher_like: null, subaccountid: null}
+vendor_lines: {billing_period: "2026-04", vendor: null, workspace: null, servicename: Usage, amount: 0.0}
+commitments: {vendor: null, billingaccountid: payer-1, subaccountid: acct-1, publishername: null, servicename: null,
+              total_paid: 0.0, total_credits: null, start_period: "2026-04", end_period: "2026-04", currency: USD}
+invoice_totals: {provider: aws, billing_period: "2026-04", invoice: null, currency: USD, amount: 0.0}
+vendor_fetch: {billing_period: "2026-04", vendor: null, through_day: 2026-04-30, fetched_at: 2026-05-02T06:00:00}
+k8s_pools: {provider: aws, subaccountid: acct-1, regionid: eu-west-1, cluster: prod, pool: null, mode: shared, namespace: null, idle: spread, weights: daily, step: 1h}
+k8s_metrics: {billing_period: "2026-04", dt: 2026-04-07, provider: aws, subaccountid: acct-1, regionid: eu-west-1,
+              cluster: prod, pool: null, namespace: "", cpu_h: 0.0, mem_h: 0.0, gpu_h: 0.0}
+
+fx_rates: {billing_period: "2026-04", from_currency: USD, to_currency: EUR, rate: 1.0}
+
+# for views cases, which start from the base tables
+base_monthly: &base_monthly
+  billingaccountid: payer-1
+  subaccountid: acct-1
+  subaccountname: shop-prod
+  regionid: eu-west-1
+  servicename: Amazon EC2
+  servicecategory: Compute
+  chargecategory: Usage
+  pricingcategory: Standard
+  x_resourcegroupname: null
+  tag_costcenter: null
+  x_namespace: null
+  split_by: null
+  billedcost: 10.0
+  effectivecost: 10.0
+  listcost: 10.0
+  currency: USD
+  billing_period: "2026-04"
+  provider: aws
+base_daily: {<<: *base_monthly, dt: 2026-04-07}
+rules_lookup: {provider: aws, subaccountid: acct-1, x_resourcegroupname: null, x_namespace: null,
+               servicename: null, tag_costcenter: null, subaccountname: null,
+               team: null, app: null, environment: null}
+
+# raw provider rows, for adapter cases (cases/adapters.yaml)
+aws_focus:
+  billing_period: "2026-04"
+  billingaccountid: payer-1
+  subaccountid: acct-1
+  subaccountname: shop-prod
+  regionid: eu-west-1
+  servicename: Amazon EC2
+  servicecategory: Compute
+  chargecategory: Usage
+  pricingcategory: Standard
+  commitmentdiscountstatus: null
+  publishername: Amazon Web Services, Inc.
+  resourceid: null
+  chargeperiodstart: 2026-04-07T00:00:00
+  chargeperiodend: 2026-04-08T00:00:00
+  billedcost: 10.0
+  effectivecost: 10.0
+  listcost: 10.0
+  billingcurrency: USD
+  invoiceid: null
+  tags: {}
+azure_focus:
+  billing_period: "2026-04"
+  billingaccountid: ea-1
+  billingaccountname: enrollment-1
+  subaccountid: sub-1
+  subaccountname: web-prod
+  regionid: eastus
+  servicename: Virtual Machines
+  servicecategory: Compute
+  chargecategory: Usage
+  pricingcategory: Standard
+  commitmentdiscountstatus: null
+  commitmentdiscountid: null
+  publishername: Microsoft
+  resourceid: null
+  x_resourcegroupname: rg-web
+  chargeperiodstart: "2026-04-07T00:00:00Z"
+  chargeperiodend: "2026-04-08T00:00:00Z"
+  billedcost: 100.0
+  effectivecost: 100.0
+  listcost: 100.0
+  x_billedcostinusd: 10.0
+  x_effectivecostinusd: 10.0
+  x_listcostinusd: 10.0
+  billingcurrency: EUR
+  tags: "{}"
+gcp_focus:
+  billing_period: "2026-04"
+  billingaccountid: ba-1
+  subaccountid: shop-prod-1234
+  subaccountname: shop-prod
+  regionid: europe-west1
+  servicename: Compute Engine
+  chargecategory: Usage
+  pricingcategory: Standard
+  publishername: Google
+  resourceid: null
+  chargeperiodstart: 2026-04-07T00:00:00
+  chargeperiodend: 2026-04-08T00:00:00
+  billedcost: 100.0
+  effectivecost: 100.0
+  listcost: 100.0
+  billingcurrency: EUR
+  x_currencyconversionrate: 0.8
+  tags: {}
+saas_focus:
+  billing_period: "2026-04"
+  billingaccountid: direct
+  subaccountid: forms-co
+  subaccountname: Forms Co
+  regionid: null
+  servicename: Forms
+  servicecategory: Web
+  chargecategory: Usage
+  pricingcategory: Standard
+  publishername: Forms Co
+  resourceid: null
+  chargeperiodstart: 2026-04-01T00:00:00
+  chargeperiodend: 2026-05-01T00:00:00
+  billedcost: 200.0
+  effectivecost: 200.0
+  listcost: 200.0
+  billingcurrency: USD

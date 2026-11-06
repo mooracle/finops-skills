@@ -1,0 +1,131 @@
+# The base loads (references/splitters.md, Proration; data-model.md).
+
+cases:
+
+- name: every cost column keeps its total, monthly and daily
+  given:
+    bill:
+    - {billedcost: 11.0, effectivecost: 7.0, listcost: 13.0}
+    - {billedcost: 5.0, effectivecost: 3.0, listcost: 6.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {sum: {billedcost: 16.0, effectivecost: 10.0, listcost: 19.0}}
+    base_daily: {sum: {billedcost: 16.0, effectivecost: 10.0, listcost: 19.0}}
+
+- name: a row with no service name still loads
+  given:
+    bill:
+    - {servicename: null, effectivecost: 40.0}
+  expect:
+    base_monthly: {where: {servicename: null}, sum: 40.0}
+
+- name: nothing from today or later loads
+  run: {today: "2026-04-10"}
+  given:
+    bill:
+    - {chargeperiodstart: 2026-04-09T00:00:00, chargeperiodend: 2026-04-10T00:00:00, effectivecost: 10.0}
+    - {chargeperiodstart: 2026-04-10T00:00:00, chargeperiodend: 2026-04-11T00:00:00, effectivecost: 20.0}
+    - {chargeperiodstart: 2026-04-12T00:00:00, chargeperiodend: 2026-04-13T00:00:00, effectivecost: 30.0}
+  expect:
+    base_monthly: {sum: 10.0}
+    base_daily: {rows: [{dt: 2026-04-09, effectivecost: 10.0}]}
+
+- name: mid-month, a spread charge has written only its days so far
+  run: {today: "2026-04-11"}
+  given:
+    bill:
+    - {chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00, effectivecost: 300.0}
+  expect:
+    base_monthly: {sum: 300.0}
+    base_daily: {count: 10, sum: 100.0}
+
+- name: a charge ending at midnight is spread over its days
+  given:
+    bill:
+    - {chargeperiodstart: 2026-04-03T00:00:00, chargeperiodend: 2026-04-06T00:00:00, effectivecost: 30.0}
+  expect:
+    base_daily:
+      rows:
+      - {dt: 2026-04-03, effectivecost: 10.0}
+      - {dt: 2026-04-04, effectivecost: 10.0}
+      - {dt: 2026-04-05, effectivecost: 10.0}
+
+- name: a charge ending a second before midnight gets the same days
+  given:
+    bill:
+    - {chargeperiodstart: 2026-04-03T00:00:00, chargeperiodend: 2026-04-05T23:59:59, effectivecost: 30.0}
+  expect:
+    base_daily:
+      rows:
+      - {dt: 2026-04-03, effectivecost: 10.0}
+      - {dt: 2026-04-04, effectivecost: 10.0}
+      - {dt: 2026-04-05, effectivecost: 10.0}
+
+- name: a charge running past the month stays whole on its first day
+  given:
+    bill:
+    - {chargeperiodstart: 2026-04-20T00:00:00, chargeperiodend: 2026-05-20T00:00:00, effectivecost: 310.0}
+  expect:
+    base_daily: {rows: [{dt: 2026-04-20, effectivecost: 310.0}]}
+
+- name: a charge dated before its month lands on the month's first day
+  given:
+    bill:
+    - {chargeperiodstart: 2026-03-28T00:00:00, chargeperiodend: 2026-03-29T00:00:00, effectivecost: 5.0}
+  expect:
+    base_daily: {rows: [{dt: 2026-04-01, effectivecost: 5.0}]}
+
+- name: a charge dated after its month lands on the month's last day
+  given:
+    bill:
+    - {chargeperiodstart: 2026-05-02T00:00:00, chargeperiodend: 2026-05-03T00:00:00, effectivecost: 5.0}
+  expect:
+    base_daily: {rows: [{dt: 2026-04-30, effectivecost: 5.0}]}
+
+- name: the latest account name wins
+  given:
+    bill:
+    - {subaccountname: shop-old, chargeperiodstart: 2026-04-02T00:00:00, chargeperiodend: 2026-04-03T00:00:00}
+    - {subaccountname: shop-new, chargeperiodstart: 2026-04-20T00:00:00, chargeperiodend: 2026-04-21T00:00:00}
+  expect:
+    base_monthly: {rows: [{subaccountname: shop-new}]}
+
+- name: a missing name on the latest row keeps the last known name
+  given:
+    bill:
+    - {subaccountname: shop-prod, chargeperiodstart: 2026-04-02T00:00:00, chargeperiodend: 2026-04-03T00:00:00}
+    - {subaccountname: null, chargeperiodstart: 2026-04-20T00:00:00, chargeperiodend: 2026-04-21T00:00:00}
+  expect:
+    base_monthly: {rows: [{subaccountname: shop-prod}]}
+
+- name: running twice gives the same month
+  given:
+    bill:
+    - {effectivecost: 25.0}
+    - {chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00, effectivecost: 60.0}
+  then:
+  - expect: {unchanged: [base_daily, base_monthly]}
+
+- name: a rebuild touches only its own provider and month
+  given:
+    bill:
+    - {effectivecost: 10.0}
+    - {billing_period: "2026-03", chargeperiodstart: 2026-03-07T00:00:00,
+       chargeperiodend: 2026-03-08T00:00:00, effectivecost: 99.0}
+    - {provider: azure, billingaccountid: ea-1, publishername: Microsoft, effectivecost: 7.0}
+  run: {period: "2026-03"}
+  then:
+  - run: {provider: azure}
+  - run: {}
+  - given:
+      bill:
+      - {provider: azure, billingaccountid: ea-1, publishername: Microsoft, effectivecost: 1.0}
+    run: {provider: azure}
+    expect:
+      base_monthly:
+        by: [provider, billing_period]
+        sums: {"aws / 2026-03": 99.0, "aws / 2026-04": 10.0, "azure / 2026-04": 8.0}
+
+- name: a month with no bill stops the run
+  expect:
+    stops: {check: totals, problems: [no_bill_rows]}

@@ -1,0 +1,167 @@
+# finops/profile.yaml — the org's shape, as the cost-attribution skill builds it.
+#
+# Every phase reads this file; nothing else carries org-specific decisions.
+# Values come from discovery queries or the interview, and `evidence` points at the
+# D-NNN entry in finops/DECISIONS.md that recorded where the value came from.
+#
+#   null      = not known yet (the component it gates stays BLOCKED)
+#   "none"    = known to be absent (e.g. owner: none → don't build)
+#   words like none, enabled and one_team match in any case
+#   guesses   = never. Defaults you chose on the user's behalf go in `assumptions`.
+#
+# Check it with the checker references/plan.md describes (written in Phase 0).
+
+schema_version: 1
+
+org:
+  owner: null              # Q-O1  team or person who runs it after the build; "none" → NOT_A_FIT
+  finance_partner: null    # Q-O2  who in finance shapes this and reviews the numbers; optional:
+                           #       "none" = nobody, the owner does both; null counts as none
+  why_build: null          # Q-O3  list from: multi_cloud, saas_bills, kubernetes, rules_in_git,
+                           #       own_categories, own_dashboards. [] → the free console option is enough
+  evidence: null
+
+runtime:
+  engine: null             # Q-R0  athena | bigquery | snowflake | databricks | … (reference: athena)
+  storage: null            # Q-R0  s3 | gcs | adls | the engine's own tables
+  orchestrator: null       # Q-R0  lambda | cloud run | composer | snowflake tasks | dbt | …
+  account: null            # Q-R1  where the pipeline runs (assume: a tooling account)
+  region: null             # Q-R1  (assume: the export bucket's region)
+  prefix: finops           # Q-R2
+  iac: terraform           # Q-R3
+  dashboard: null          # Q-R4  anything that reads the engine
+
+providers:                 # one entry per FOCUS source; D0
+  - id: aws                # aws | azure | gcp | other (adapters in references/providers.md)
+    export: null           # enabled | missing
+    focus_version: null    # "1.2" preferred; "1.0" works with fewer columns
+    delivery: null         # D0; overwrite | new_folder (AWS CREATE_NEW_REPORT: a folder per
+                           # delivery; Phase 1 adds a 1.2 overwrite export beside it)
+    location: null         # s3://bucket/prefix (or storage account / BigQuery dataset)
+    months_available: null
+    billing_currency: null # D0; what the export's BillingCurrency says
+    evidence: null
+
+dimensions:                # D1, D3 → the base_daily schema
+  columns: [subaccountid, subaccountname, servicename, servicecategory,
+            regionid, chargecategory, pricingcategory]
+  tags: []                 # - {key: CostCenter, spellings: [costcenter, cost-center], pct_cost: 72}
+  evidence: null
+
+categories:                # Q-C1..3 → rule outputs and view columns
+  outputs: null            # Q-C1  recommend [team, environment]; team is required
+  environment_values: [Production, Development, Test, Sandbox]
+  hierarchy: null          # Q-C2  {levels: [division, cost_center, team], owner: <who keeps it>};
+                           #       none = no hierarchy yet (Q-C2's default)
+  evidence: null
+
+routing:                   # D2, D8, Q-G1..3
+  key: [provider, subaccountid, x_resourcegroupname, x_namespace, servicename]
+                           # Q-G3: what rules can match, as base-table columns in key
+                           # order; add tag_<key> per routed tag. Every field must be
+                           # grouped (dimensions) and is fixed in Phase 3: adding one
+                           # later rebuilds every month and migrates the lookup
+  account_convention: null # {regex: "^([a-z]+)-([a-z]+)-(prod|dev)$", pct_cost: 81, policy: true}
+                           # "none" when the names follow no convention
+  accounts_shared_by_teams: null # Q-G2  [] when none; - {account: data-shared, split_by: x_resourcegroupname}
+  azure_resource_groups: false
+  evidence: null
+
+period_charges:            # D4
+  material: null           # true when multi-day charges are a visible share of a month
+  evidence: null
+
+shared_costs: []           # D5 + Q-S1, one entry per shared charge
+# - id: support                     # must equal the shared_cost value the adapter writes
+#   provider: aws                   # (focus_aws_v marks Enterprise Support 'support');
+#                                   # the run stops if that provider's bill carries an id
+#                                   # not listed here
+#   match: {servicename: "AWS Support (Enterprise)"}
+#   weights: first_party_spend
+#   evidence: D-006
+
+kubernetes:                # D7 + Q-K1..8
+  coverage_target: 0.9    # Q-K4; the skill's default, assumed (and logged) unless the user picks one
+  shared_owner: null       # Q-K4  who carries the <cluster>/pool:<pool> and
+                           #       <cluster>/cluster:shared buckets and system namespaces
+  idle: null               # Q-K6  spread | bucket; written to every k8s_pools row
+  weights: null            # Q-K7  daily | monthly; written to every k8s_pools row
+  clusters: []
+# - id: prod-eu            # unique in this profile
+#   name: prod             # the cluster tag's value; one name can be two clusters (in two
+#                          # regions of one account: regionid goes in routing.key)
+#   provider: aws
+#   account: acct-platform # the subaccountid that runs it (D7)
+#   region: eu-west-1      # its regionid; a pool is (account, region, cluster, pool)
+#   distribution: eks      # eks | aks | gke | openshift | other
+#   tags: {cluster: "aws:eks:cluster-name", pool: "eks:nodegroup-name",
+#          pvc_namespace: "kubernetes.io/created-for/pvc/namespace",
+#          lb_stack: "ingress.k8s.aws/stack",
+#          activated: true}       # AWS only, from D7: true when every key above is an active
+#                                 # cost allocation tag; false, null or missing blocks. Other
+#                                 # providers have no activation step: it doesn't apply there
+#   workload_namespaces: 9        # D7: namespaces that run workloads, system ones aside;
+#                                 # 1 → NOT_A_FIT (nothing to split); null blocks
+#   pools:
+#     dedicated: {pikachu-pool: pikachu, eevee-pool: eevee}   # pool → its namespace
+#     shared: [general]
+#     gpu: []                       # Q-K3; null = unknown (blocks the shared split)
+#     short_jobs: []                # Q-K8  shared or gpu pools of short jobs, sampled every 5 minutes
+#                                   #       (Prometheus only); null = unknown (blocks the shared split)
+#                                   # these become k8s_pools rows (mode dedicated|shared|gpu;
+#                                   # step 5m for short_jobs, else 1h)
+#   shared_ingress: []              # Q-K5  - {namespace: ingress-nginx, pool: general}
+#   metrics:
+#     source: prometheus            # prometheus | datadog | none
+#     endpoint: null                # Q-K2  the query URL; its credentials live with the other secrets
+#     cluster_selector: null        # Q-K2  what picks this cluster on the endpoint: 'cluster="eks-prod-eu"',
+#                                   #       'kube_cluster_name:prod-eu' on Datadog; "" when it serves this
+#                                   #       cluster alone; null blocks the shared split
+#     pool_label: label_eks_amazonaws_com_nodegroup   # the kube_node_labels name, or the Datadog tag
+#     pool_label_exported: null     # true once the Q-K2 probe returns one series per pool
+#   untagged_pct: 4                 # D7: cluster spend with no pool tag
+#   evidence: D-008
+
+saas:
+  vendors: []
+# - id: metrics-vendor              # one id per billing identity; it is the vendor_registry id
+#   billed: marketplace               # marketplace | direct (Q-V1: always ask)
+#   provider: aws                     # the bill its rows sit on (marketplace only)
+#   shape: shares                     # shares | one_team
+#   monthly_cost: 6500                # D6, rough
+#   used_by_teams: 7                  # Q-V2
+#   facts:                            # Q-V3, each {value, evidence}; see references/saas.md
+#     where_billed:       {value: "publisher LIKE 'metrics co%' on the payer", evidence: D-010}
+#     billing_identities: {value: "one subscription", evidence: D-010}
+#     invoice_shape:      {value: "one Usage row per day", evidence: D-010}
+#     unit:               {value: "child organization -> x_namespace; owners via rules", evidence: D-011}
+#     breakdown:          {value: "usage $ per child org, includes overhead", evidence: D-011}
+#     completeness:       {value: "final 3 days after month end; API keeps 13 months", evidence: D-011}
+
+finance:
+  chargeback_column: effectivecost   # invariant; D9 is the evidence shown to finance
+  charge_categories: null  # Q-F3  recommend each provider's usual list (references/providers.md),
+                           #       tax out; whether credits flow to the teams is the org's call
+                           #       (article Part 2);
+                           #       per provider when they differ: {aws: [...], gcp: [Usage, Adjustment]}
+  reporting_currency: null # Q-F4  USD | EUR | GBP | … | per_provider (each in its own; no sums across)
+  fx_rates: null           # Q-F4  who keeps the monthly rate table, when a provider bills in
+                           #       another currency and its export has no conversion
+                           #       (AWS or a direct vendor billed in USD, reporting in EUR, say)
+  uses: null               # Q-F1  how finance uses the numbers, in their words (showback report,
+                           #       chargeback per cost center, budgets vs actuals, …)
+  frozen_close: null       # Q-F1  false or none (no frozen month), or {schedule, deadline, grain, ready_when: [...],
+                           #       overrides: who may freeze despite a known problem}; ready_when is
+                           #       what else must hold besides the views check and, where the org enters invoice
+                           #       totals (Q-F5), the invoice check; none = nothing
+  unallocated_alert: null # Q-F2  per month, in reporting_currency (per_provider: {aws: 1000, azure: 900})
+  invoice_totals: {by: null, day: null}
+                           # Q-F5  by: who enters each month's invoice totals, or pulls them from
+                           #       the provider's invoice API (null: the owner, Q-O1); day: the day
+                           #       of the next month the invoices usually arrive (null: the check runs once the
+                           #       month's totals are entered, and never alarms on a missing one);
+                           #       none instead = no invoice check: nothing ties the bill to the invoice
+  evidence: null
+
+assumptions: []
+# - {path: runtime.region, value: eu-west-1, why: "export bucket region", decision: D-004}

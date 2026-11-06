@@ -1,0 +1,306 @@
+# Kubernetes (references/kubernetes.md; article Part 6).
+
+cases:
+
+- name: the article's worked example
+  tolerance: 0.01
+  given:
+    k8s_pools: [{pool: G, mode: shared}]
+    k8s_metrics:
+    - {pool: G, namespace: "", cpu_h: 1200, mem_h: 4800}
+    - {pool: G, namespace: pikachu, cpu_h: 480, mem_h: 2016}
+    - {pool: G, namespace: eevee, cpu_h: 240, mem_h: 960}
+    - {pool: G, namespace: snorlax, cpu_h: 120, mem_h: 384}
+    bill:
+    - {servicename: Amazon EC2, effectivecost: 1000.0, k8s_cluster: prod, k8s_pool: G}
+    - {servicename: Amazon EBS, effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G}
+    - {servicename: Elastic Load Balancing, effectivecost: 25.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {prod/pikachu: 621.25, prod/eevee: 295.83, prod/snorlax: 147.92}
+    base_daily: {sum: 1065.0}
+
+- name: idle capacity in its own bucket
+  tolerance: 0.01
+  given:
+    k8s_pools: [{pool: G, mode: shared, idle: bucket}]
+    k8s_metrics:
+    - {pool: G, namespace: "", cpu_h: 1200, mem_h: 4800}
+    - {pool: G, namespace: pikachu, cpu_h: 480, mem_h: 2016}
+    - {pool: G, namespace: eevee, cpu_h: 240, mem_h: 960}
+    - {pool: G, namespace: snorlax, cpu_h: 120, mem_h: 384}
+    bill:
+    - {servicename: Amazon EC2, effectivecost: 1000.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {prod/pikachu: 420.0, prod/eevee: 200.0, prod/snorlax: 100.0, "prod/idle:G": 280.0}
+
+- name: bindings past 1.0 leave nothing for the idle bucket
+  tolerance: 0.01
+  given:
+    k8s_pools: [{pool: G, mode: shared, idle: bucket}]
+    k8s_metrics:
+    - {pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {pool: G, namespace: a, cpu_h: 80, mem_h: 10}
+    - {pool: G, namespace: b, cpu_h: 10, mem_h: 60}
+    bill:
+    - {effectivecost: 70.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {prod/a: 40.0, prod/b: 30.0}
+
+- name: a dedicated pool goes to its namespace
+  given:
+    k8s_pools: [{pool: pikachu-pool, mode: dedicated, namespace: pikachu}]
+    bill:
+    - {effectivecost: 90.0, k8s_cluster: prod, k8s_pool: pikachu-pool}
+  expect:
+    base_monthly:
+      rows: [{x_namespace: prod/pikachu, split_by: "k8s:prod", effectivecost: 90.0}]
+
+- name: a disk or load balancer follows the namespace that asked for it
+  given:
+    bill:
+    - {servicename: Amazon EBS, effectivecost: 8.0, k8s_cluster: prod, k8s_namespace: eevee}
+    - {servicename: Elastic Load Balancing, effectivecost: 5.0, k8s_cluster: prod, k8s_namespace: snorlax}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {prod/eevee: 8.0, prod/snorlax: 5.0}
+
+- name: a namespace tag wins over the pool it runs in
+  given:
+    k8s_pools: [{pool: G, mode: shared}]
+    k8s_metrics:
+    - {pool: G, namespace: "", cpu_h: 10, mem_h: 10}
+    - {pool: G, namespace: pikachu, cpu_h: 5, mem_h: 5}
+    bill:
+    - {servicename: Amazon EBS, effectivecost: 8.0, k8s_cluster: prod, k8s_pool: G, k8s_namespace: eevee}
+  expect:
+    base_monthly: {rows: [{x_namespace: prod/eevee, effectivecost: 8.0}]}
+
+- name: a GPU pool splits by GPU requests alone
+  given:
+    k8s_pools: [{pool: gpu-a, mode: gpu}]
+    k8s_metrics:
+    - {pool: gpu-a, namespace: "", cpu_h: 96, mem_h: 768, gpu_h: 48}
+    - {pool: gpu-a, namespace: train, cpu_h: 90, mem_h: 700, gpu_h: 12}
+    - {pool: gpu-a, namespace: infer, cpu_h: 2, mem_h: 8, gpu_h: 36}
+    bill:
+    - {effectivecost: 400.0, k8s_cluster: prod, k8s_pool: gpu-a}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {prod/train: 100.0, prod/infer: 300.0}
+
+- name: a GPU pool with no capacity row stays in its bucket
+  given:
+    k8s_pools: [{pool: gpu-a, mode: gpu}]
+    k8s_metrics:
+    - {pool: gpu-a, namespace: train, gpu_h: 12}
+    - {pool: gpu-a, namespace: infer, gpu_h: 36}
+    bill:
+    - {effectivecost: 400.0, k8s_cluster: prod, k8s_pool: gpu-a}
+  expect:
+    base_monthly: {rows: [{x_namespace: "prod/pool:gpu-a", effectivecost: 400.0}]}
+
+- name: a GPU pool with no GPU capacity stays in its bucket
+  given:
+    k8s_pools: [{pool: gpu-a, mode: gpu}]
+    k8s_metrics:
+    - {pool: gpu-a, namespace: "", cpu_h: 96, mem_h: 768, gpu_h: 0}
+    - {pool: gpu-a, namespace: train, cpu_h: 48, mem_h: 384, gpu_h: 12}
+    - {pool: gpu-a, namespace: infer, gpu_h: 36}
+    bill:
+    - {effectivecost: 400.0, k8s_cluster: prod, k8s_pool: gpu-a}
+  expect:
+    base_monthly: {rows: [{x_namespace: "prod/pool:gpu-a", effectivecost: 400.0}]}
+
+- name: a shared pool with no capacity row stays in its bucket
+  given:
+    k8s_pools: [{pool: H, mode: shared}]
+    k8s_metrics:
+    - {pool: H, namespace: web, cpu_h: 30, mem_h: 120}
+    - {pool: H, namespace: jobs, cpu_h: 10, mem_h: 40}
+    bill:
+    - {effectivecost: 70.0, k8s_cluster: prod, k8s_pool: H}
+  expect:
+    base_monthly: {rows: [{x_namespace: "prod/pool:H", effectivecost: 70.0}]}
+
+- name: a shared pool without metrics stays in a visible bucket
+  given:
+    k8s_pools: [{pool: H, mode: shared}]
+    bill:
+    - {effectivecost: 70.0, k8s_cluster: prod, k8s_pool: H}
+  expect:
+    base_monthly: {rows: [{x_namespace: "prod/pool:H", split_by: "k8s:prod", effectivecost: 70.0}]}
+
+- name: a pool nobody described stays in a visible bucket
+  given:
+    bill:
+    - {effectivecost: 12.0, k8s_cluster: prod, k8s_pool: surprise}
+  expect:
+    base_monthly: {rows: [{x_namespace: "prod/pool:surprise", effectivecost: 12.0}]}
+
+- name: cluster-wide cost lands in a visible bucket
+  given:
+    bill:
+    - {servicename: Amazon EKS, effectivecost: 10.0, k8s_cluster: prod}
+  expect:
+    base_monthly: {rows: [{x_namespace: "prod/cluster:shared", split_by: "k8s:prod", effectivecost: 10.0}]}
+
+- name: a namespace tag without a cluster is not attributed
+  given:
+    bill:
+    - {effectivecost: 6.0, k8s_namespace: eevee}
+  expect:
+    base_monthly: {rows: [{x_namespace: null, split_by: null, effectivecost: 6.0}]}
+
+- name: the daily split matches the monthly one
+  given:
+    k8s_pools: [{pool: G, mode: shared}]
+    k8s_metrics:
+    - {pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {pool: G, namespace: a, cpu_h: 30, mem_h: 10}
+    - {pool: G, namespace: b, cpu_h: 10, mem_h: 10}
+    bill:
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly: {by: x_namespace, sums: {prod/a: 30.0, prod/b: 10.0}}
+    base_daily: {by: x_namespace, sums: {prod/a: 30.0, prod/b: 10.0}}
+
+# --- daily weights: each day splits by its own metrics
+- name: a namespace that triples its requests on one day pays for it on that day only
+  given:
+    k8s_pools: [{pool: G, mode: shared}]
+    k8s_metrics:
+    - {dt: 2026-04-07, pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {dt: 2026-04-07, pool: G, namespace: a, cpu_h: 10, mem_h: 10}
+    - {dt: 2026-04-07, pool: G, namespace: b, cpu_h: 10, mem_h: 10}
+    - {dt: 2026-04-08, pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {dt: 2026-04-08, pool: G, namespace: a, cpu_h: 30, mem_h: 30}
+    - {dt: 2026-04-08, pool: G, namespace: b, cpu_h: 10, mem_h: 10}
+    bill:
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G,
+       chargeperiodstart: 2026-04-07T00:00:00, chargeperiodend: 2026-04-08T00:00:00}
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G,
+       chargeperiodstart: 2026-04-08T00:00:00, chargeperiodend: 2026-04-09T00:00:00}
+  expect:
+    base_daily:
+      where: {x_namespace: prod/a}
+      rows:
+      - {dt: 2026-04-07, effectivecost: 20.0}
+      - {dt: 2026-04-08, effectivecost: 30.0}
+    base_monthly: {by: x_namespace, sums: {prod/a: 50.0, prod/b: 30.0}}
+
+- name: a day with no capacity row lands in the pool bucket for that day only
+  given:
+    k8s_pools: [{pool: G, mode: shared}]
+    k8s_metrics:
+    - {dt: 2026-04-07, pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {dt: 2026-04-07, pool: G, namespace: a, cpu_h: 50, mem_h: 50}
+    bill:
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G,
+       chargeperiodstart: 2026-04-07T00:00:00, chargeperiodend: 2026-04-08T00:00:00}
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G,
+       chargeperiodstart: 2026-04-08T00:00:00, chargeperiodend: 2026-04-09T00:00:00}
+  expect:
+    base_monthly: {by: x_namespace, sums: {prod/a: 40.0, "prod/pool:G": 40.0}}
+
+- name: monthly weights spread the month's mix over every day
+  given:
+    k8s_pools: [{pool: G, mode: shared, weights: monthly}]
+    k8s_metrics:
+    - {dt: 2026-04-07, pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {dt: 2026-04-07, pool: G, namespace: a, cpu_h: 10, mem_h: 10}
+    - {dt: 2026-04-07, pool: G, namespace: b, cpu_h: 10, mem_h: 10}
+    - {dt: 2026-04-08, pool: G, namespace: "", cpu_h: 100, mem_h: 100}
+    - {dt: 2026-04-08, pool: G, namespace: a, cpu_h: 30, mem_h: 30}
+    - {dt: 2026-04-08, pool: G, namespace: b, cpu_h: 10, mem_h: 10}
+    bill:
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G,
+       chargeperiodstart: 2026-04-07T00:00:00, chargeperiodend: 2026-04-08T00:00:00}
+    - {effectivecost: 40.0, k8s_cluster: prod, k8s_pool: G,
+       chargeperiodstart: 2026-04-09T00:00:00, chargeperiodend: 2026-04-10T00:00:00}
+  tolerance: 0.01
+  expect:
+    base_daily:
+      where: {x_namespace: prod/a}
+      rows:
+      - {dt: 2026-04-07, effectivecost: 26.67}
+      - {dt: 2026-04-09, effectivecost: 26.67}
+    base_monthly: {by: x_namespace, sums: {prod/a: 53.33, prod/b: 26.67}}
+
+- name: clusters with one name in two accounts split on their own metrics
+  given:
+    k8s_pools:
+    - {subaccountid: acct-a, pool: G, mode: shared}
+    - {subaccountid: acct-b, pool: G, mode: shared}
+    k8s_metrics:
+    - {subaccountid: acct-a, pool: G, namespace: "", cpu_h: 10, mem_h: 10}
+    - {subaccountid: acct-a, pool: G, namespace: app-a, cpu_h: 5, mem_h: 5}
+    - {subaccountid: acct-b, pool: G, namespace: "", cpu_h: 10, mem_h: 10}
+    - {subaccountid: acct-b, pool: G, namespace: app-b, cpu_h: 5, mem_h: 5}
+    bill:
+    - {subaccountid: acct-a, effectivecost: 100.0, k8s_cluster: prod, k8s_pool: G}
+    - {subaccountid: acct-b, effectivecost: 300.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly: {by: x_namespace, sums: {prod/app-a: 100.0, prod/app-b: 300.0}}
+
+- name: clusters with one name in two regions split on their own metrics
+  given:
+    k8s_pools:
+    - {regionid: eu-west-1, pool: G, mode: shared}
+    - {regionid: us-east-1, pool: G, mode: shared}
+    k8s_metrics:
+    - {regionid: eu-west-1, pool: G, namespace: "", cpu_h: 10, mem_h: 10}
+    - {regionid: eu-west-1, pool: G, namespace: app-west, cpu_h: 5, mem_h: 5}
+    - {regionid: us-east-1, pool: G, namespace: "", cpu_h: 10, mem_h: 10}
+    - {regionid: us-east-1, pool: G, namespace: app-east, cpu_h: 5, mem_h: 5}
+    bill:
+    - {regionid: eu-west-1, effectivecost: 100.0, k8s_cluster: prod, k8s_pool: G}
+    - {regionid: us-east-1, effectivecost: 300.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly: {by: x_namespace, sums: {prod/app-west: 100.0, prod/app-east: 300.0}}
+
+- name: a pool is measured against its own region's capacity
+  given:
+    k8s_pools:
+    - {regionid: eu-west-1, pool: G, mode: shared}
+    - {regionid: us-east-1, pool: G, mode: shared}
+    k8s_metrics:
+    - {regionid: eu-west-1, pool: G, namespace: "", cpu_h: 10, mem_h: 100}
+    - {regionid: eu-west-1, pool: G, namespace: a, cpu_h: 5, mem_h: 10}
+    - {regionid: eu-west-1, pool: G, namespace: b, cpu_h: 1, mem_h: 50}
+    - {regionid: us-east-1, pool: G, namespace: "", cpu_h: 100, mem_h: 10}
+    bill:
+    - {regionid: eu-west-1, effectivecost: 100.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    base_monthly: {by: x_namespace, sums: {prod/a: 50.0, prod/b: 50.0}}
+
+- name: coverage reports how much reached a namespace
+  given:
+    k8s_pools: [{pool: pikachu-pool, mode: dedicated, namespace: pikachu}]
+    bill:
+    - {effectivecost: 90.0, k8s_cluster: prod, k8s_pool: pikachu-pool}
+    - {effectivecost: 10.0, k8s_cluster: prod, k8s_pool: H}
+  expect:
+    report:
+      name: k8s_coverage
+      rows: [{cluster: prod, cluster_cost: 100.0, on_namespaces: 90.0, coverage: 0.9}]
+
+- name: an idle bucket counts as covered
+  given:
+    k8s_pools: [{pool: G, mode: shared, idle: bucket}]
+    k8s_metrics:
+    - {pool: G, namespace: "", cpu_h: 10, mem_h: 10}
+    - {pool: G, namespace: a, cpu_h: 5, mem_h: 5}
+    bill:
+    - {effectivecost: 100.0, k8s_cluster: prod, k8s_pool: G}
+  expect:
+    report:
+      name: k8s_coverage
+      rows: [{cluster: prod, cluster_cost: 100.0, on_namespaces: 50.0, idle: 50.0, coverage: 1.0}]

@@ -1,0 +1,107 @@
+# The attribution views (references/rules-engine.md; article Part 4).
+
+cases:
+
+- name: a tuple with a rule gets its team, case and NULLs aside
+  run: false
+  given:
+    base_monthly:
+    - {servicename: Amazon EC2, x_namespace: Prod/Pikachu, tag_costcenter: CC-7}
+    rules_lookup:
+    - {servicename: amazon ec2, x_namespace: prod/pikachu, tag_costcenter: cc-7, team: payments}
+  expect:
+    services_monthly: {rows: [{team: payments, app: Unallocated, environment: Unallocated}]}
+
+- name: an empty value and a NULL are the same key
+  run: false
+  given:
+    base_monthly: [{x_resourcegroupname: ""}]
+    rules_lookup: [{servicename: amazon ec2, team: payments}]
+  expect:
+    services_monthly: {rows: [{team: payments}]}
+
+- name: a non-ASCII letter keeps its case on both sides
+  run: false
+  given:
+    base_monthly: [{tag_costcenter: "İ-7"}]
+    rules_lookup: [{servicename: amazon ec2, tag_costcenter: "İ-7", team: payments}]
+  expect:
+    services_monthly: {rows: [{team: payments}]}
+
+- name: the daily view categorizes every day the same way
+  run: false
+  given:
+    base_daily: [{servicename: Amazon EC2}]
+    rules_lookup: [{servicename: amazon ec2, team: payments}]
+  expect:
+    services_daily: {rows: [{dt: 2026-04-07, team: payments, app: Unallocated}]}
+
+- name: a tuple with no rule is Unallocated
+  run: false
+  given:
+    base_monthly: [{servicename: Amazon S3}]
+    rules_lookup: [{servicename: amazon ec2, team: payments}]
+  expect:
+    services_monthly: {rows: [{team: Unallocated, app: Unallocated, environment: Unallocated}]}
+
+- name: two tuples differing only by tag reach different teams
+  run: false
+  given:
+    base_monthly:
+    - {tag_costcenter: cc-1, effectivecost: 1.0}
+    - {tag_costcenter: cc-2, effectivecost: 2.0}
+    rules_lookup:
+    - {servicename: amazon ec2, tag_costcenter: cc-1, team: search}
+    - {servicename: amazon ec2, tag_costcenter: cc-2, team: data}
+  expect:
+    services_monthly: {by: team, sums: {search: 1.0, data: 2.0}}
+
+- name: the split is classified from split_by, never from the namespace's shape
+  run: false
+  given:
+    base_monthly:
+    - {split_by: "k8s:prod", x_namespace: prod/pikachu, effectivecost: 1.0}
+    - {split_by: "k8s:prod", x_namespace: "prod/pool:H", effectivecost: 2.0}
+    - {split_by: "vendor:metrics", x_namespace: ws-a, effectivecost: 3.0}
+    - {split_by: "vendor:metrics", x_namespace: org/ws-b, effectivecost: 6.0}
+    - {split_by: "share:support", x_namespace: null, effectivecost: 4.0}
+    - {split_by: null, x_namespace: null, effectivecost: 5.0}
+  expect:
+    services_monthly:
+      rows:
+      - {effectivecost: 1.0, split_kind: k8s, unit_scope: prod, unit_name: pikachu}
+      - {effectivecost: 2.0, split_kind: k8s, unit_scope: prod, unit_name: "pool:H"}
+      - {effectivecost: 3.0, split_kind: vendor, unit_scope: metrics, unit_name: ws-a}
+      - {effectivecost: 6.0, split_kind: vendor, unit_scope: metrics, unit_name: org/ws-b}
+      - {effectivecost: 4.0, split_kind: share, unit_scope: null, unit_name: null}
+      - {effectivecost: 5.0, split_kind: null, unit_scope: null, unit_name: null}
+
+- name: the worklist holds only unallocated tuples and their shares
+  run: false
+  given:
+    base_monthly:
+    - {servicename: Amazon S3, effectivecost: 5.0}
+    - {servicename: AWS Glue, effectivecost: 15.0}
+    - {servicename: Amazon EC2, effectivecost: 80.0}
+    rules_lookup: [{servicename: amazon ec2, team: payments}]
+  expect:
+    report:
+      name: unallocated
+      rows:
+      - {servicename: AWS Glue, part_of_unallocated: 0.75}
+      - {servicename: Amazon S3, part_of_unallocated: 0.25}
+
+- name: the worklist's shares are per currency, never across
+  run: false
+  given:
+    base_monthly:
+    - {provider: aws, currency: USD, servicename: Amazon S3, effectivecost: 30.0}
+    - {provider: azure, currency: EUR, servicename: Storage, effectivecost: 10.0}
+    - {provider: azure, currency: EUR, servicename: Virtual Machines, effectivecost: 30.0}
+  expect:
+    report:
+      name: unallocated
+      rows:
+      - {servicename: Amazon S3, currency: USD, part_of_unallocated: 1.0}
+      - {servicename: Virtual Machines, currency: EUR, part_of_unallocated: 0.75}
+      - {servicename: Storage, currency: EUR, part_of_unallocated: 0.25}

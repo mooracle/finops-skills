@@ -1,0 +1,324 @@
+# Vendor splits (references/saas.md; article Part 5).
+
+cases:
+
+- name: a vendor charge splits by the vendor's breakdown
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: 60.0}
+    - {vendor: metrics, workspace: ws-b, servicename: Storage, amount: 30.0}
+    - {vendor: metrics, workspace: null, servicename: Support, amount: 10.0}
+    - {vendor: metrics, workspace: ws-c, servicename: Compute, amount: 0.0}
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {subaccountid: acct-m, publishername: Metrics Co, first_party: false, servicename: Metrics Co Cloud,
+       chargecategory: Purchase, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly:
+      rows:
+      - {x_namespace: ws-a, servicename: Compute, subaccountid: acct-m, split_by: "vendor:metrics", effectivecost: 600.0}
+      - {x_namespace: ws-b, servicename: Storage, subaccountid: acct-m, split_by: "vendor:metrics", effectivecost: 300.0}
+      - {x_namespace: null, servicename: Metrics Co Cloud, subaccountid: acct-m, split_by: "vendor:metrics", effectivecost: 100.0}
+    base_daily: {sum: 1000.0}
+    report:
+      name: vendor_status
+      rows: [{vendor: metrics, status: split}]
+
+- name: until the breakdown covers the month, the charge stays whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 60.0}]
+    vendor_fetch: [{vendor: metrics, through_day: 2026-04-20}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, chargecategory: Purchase, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{x_namespace: null, split_by: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: waiting}]}
+
+- name: a negative line leaves the charge whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: 60.0}
+    - {vendor: metrics, workspace: ws-b, servicename: Refund, amount: -5.0}
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: unusable}]}
+
+- name: a refund inside one workspace's lines still leaves the charge whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: 60.0}
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: -5.0}
+    - {vendor: metrics, workspace: ws-b, servicename: Compute, amount: 40.0}
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, x_namespace: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: unusable}]}
+
+- name: a line with no amount leaves the charge whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: 100.0}
+    - {vendor: metrics, workspace: ws-b, servicename: Compute, amount: null}
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, x_namespace: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: unusable}]}
+
+- name: a line that isn't a finite number leaves the charge whole, and the run goes on
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: 100.0}
+    - {vendor: metrics, workspace: ws-b, servicename: Compute, amount: .inf}
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, x_namespace: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: unusable}]}
+
+- name: a vendor whose lines all lack an amount is unusable, not missing
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: null}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: unusable}]}
+
+- name: a breakdown that adds up to nothing leaves the charge whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 0.0}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: unusable}]}
+
+- name: a vendor whose shim wrote no lines stays whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly: {rows: [{split_by: null, effectivecost: 1000.0}]}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: no_lines}]}
+
+- name: a directly billed vendor splits the same way
+  run: {provider: other}
+  given:
+    vendor_registry: [{vendor: forms, provider: other, publisher_like: "forms co%"}]
+    vendor_lines:
+    - {vendor: forms, workspace: team-x, servicename: Forms, amount: 3.0}
+    - {vendor: forms, workspace: team-y, servicename: Forms, amount: 1.0}
+    vendor_fetch: [{vendor: forms}]
+    bill:
+    - {provider: other, billingaccountid: direct, subaccountid: forms-co, publishername: Forms Co,
+       first_party: false, servicename: Forms, effectivecost: 200.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {team-x: 150.0, team-y: 50.0}
+  then:
+  - run: {provider: aws}
+    expect:
+      stops: {check: totals, problems: [no_bill_rows]}
+      split_weights: {where: {provider: aws}, count: 0}
+
+- name: two billing identities of one vendor split on their own lines
+  given:
+    vendor_registry:
+    - {vendor: metrics-eu, publisher_like: "metrics co%", subaccountid: acct-eu}
+    - {vendor: metrics-us, publisher_like: "metrics co%", subaccountid: acct-us}
+    vendor_lines:
+    - {vendor: metrics-eu, workspace: ws-eu, servicename: Compute, amount: 1.0}
+    - {vendor: metrics-us, workspace: ws-us-1, servicename: Compute, amount: 1.0}
+    - {vendor: metrics-us, workspace: ws-us-2, servicename: Compute, amount: 3.0}
+    vendor_fetch: [{vendor: metrics-eu}, {vendor: metrics-us}]
+    bill:
+    - {subaccountid: acct-eu, publishername: Metrics Co, first_party: false, effectivecost: 100.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+    - {subaccountid: acct-us, publishername: Metrics Co, first_party: false, effectivecost: 400.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly:
+      by: x_namespace
+      sums: {ws-eu: 100.0, ws-us-1: 100.0, ws-us-2: 300.0}
+
+- name: a registry row pasted twice loads nothing twice
+  given:
+    vendor_registry:
+    - {vendor: metrics, publisher_like: "metrics co%"}
+    - {vendor: metrics, publisher_like: "metrics co%"}
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 1.0}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, chargecategory: Usage, effectivecost: 100.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+    - {publishername: Metrics Co, first_party: false, chargecategory: Credit, effectivecost: -100.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly:
+      by: chargecategory
+      sums: {Usage: 100.0, Credit: -100.0}
+
+- name: overlapping registry entries stop the run before anything is cleared
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 1.0}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  then:
+  - given:
+      vendor_registry: [{vendor: metrics-again, publisher_like: "metrics%"}]
+    expect:
+      stops: {check: weights, problems: [bill_rows_added, registry_overlap]}
+      unchanged: [base_monthly]
+
+- name: a charge running past its month stays whole
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 1.0}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, chargecategory: Purchase, effectivecost: 1200.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2027-04-01T00:00:00}
+    - {publishername: Metrics Co, first_party: false, chargecategory: Usage, effectivecost: 50.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    base_monthly:
+      rows:
+      - {chargecategory: Purchase, split_by: null, x_namespace: null, effectivecost: 1200.0}
+      - {chargecategory: Usage, split_by: "vendor:metrics", x_namespace: ws-a, effectivecost: 50.0}
+    report: {name: vendor_status, rows: [{vendor: metrics, status: split, on_bill: 1250.0, kept_whole: 1200.0}]}
+
+- name: a prepaid deal, if spread, spreads on the bill side and every cost column still adds up
+  given:
+    commitments:
+    - {vendor: metrics, billingaccountid: payer-1, subaccountid: acct-1, publishername: Metrics Co,
+       servicename: Metrics Co Cloud, total_paid: 1200.0, total_credits: 12000.0,
+       start_period: "2026-04", end_period: "2027-03", currency: USD}
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, servicename: Compute, amount: 600.0}
+    - {vendor: metrics, workspace: ws-b, servicename: Compute, amount: 400.0}
+    vendor_fetch: [{vendor: metrics}]
+    aws_focus:
+    - {publishername: Metrics Co, servicename: Metrics Co Cloud, chargecategory: Purchase,
+       billedcost: 1200.0, effectivecost: 1200.0, listcost: 1200.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2027-04-01T00:00:00}
+  expect:
+    adapter:aws:
+      where: {billing_period: "2026-04"}
+      rows:
+      - {chargecategory: Purchase, billedcost: 1200.0, effectivecost: 0.0, listcost: 1200.0}
+      - {chargecategory: Usage, pricingcategory: Committed, subaccountid: acct-1,
+         billedcost: 0.0, effectivecost: 100.0, listcost: 0.0,
+         chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+    base_monthly:
+      rows:
+      - {chargecategory: Purchase, split_by: null, billedcost: 1200.0, effectivecost: 0.0, listcost: 1200.0}
+      - {x_namespace: ws-a, split_by: "vendor:metrics", billedcost: 0.0, effectivecost: 60.0, listcost: 0.0}
+      - {x_namespace: ws-b, split_by: "vendor:metrics", billedcost: 0.0, effectivecost: 40.0, listcost: 0.0}
+    base_daily: {sum: {billedcost: 1200.0, effectivecost: 100.0, listcost: 1200.0}}
+
+- name: a prepaid deal's overage month gets only what's left of total_paid
+  run: false
+  given:
+    commitments:
+    - {vendor: metrics, publishername: Metrics Co, servicename: Metrics Co Cloud,
+       total_paid: 1200.0, total_credits: 12000.0, start_period: "2026-04", end_period: "2026-05"}
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, amount: 2000.0}
+    - {billing_period: "2026-05", vendor: metrics, workspace: ws-a, amount: 11000.0}
+    aws_focus:
+    - {publishername: Metrics Co, servicename: Metrics Co Cloud, chargecategory: Purchase, effectivecost: 1200.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-06-01T00:00:00}
+    - {billing_period: "2026-05", chargeperiodstart: 2026-05-07T00:00:00, chargeperiodend: 2026-05-08T00:00:00}
+  expect:
+    adapter:aws:
+      where: {pricingcategory: Committed}
+      rows:
+      - {billing_period: "2026-04", effectivecost: 200.0}
+      - {billing_period: "2026-05", effectivecost: 1000.0}
+
+- name: a prepaid deal's unused credits land whole in its last month, and unmapped lines count as used
+  run: false
+  given:
+    commitments:
+    - {vendor: metrics, publishername: Metrics Co, servicename: Metrics Co Cloud,
+       total_paid: 1200.0, total_credits: 12000.0, start_period: "2026-04", end_period: "2026-05"}
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines:
+    - {vendor: metrics, workspace: ws-a, amount: 200.0}
+    - {vendor: metrics, workspace: null, amount: 100.0}
+    - {billing_period: "2026-05", vendor: metrics, workspace: ws-a, amount: 200.0}
+    aws_focus:
+    - {publishername: Metrics Co, servicename: Metrics Co Cloud, chargecategory: Purchase, effectivecost: 1200.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-06-01T00:00:00}
+    - {billing_period: "2026-05", chargeperiodstart: 2026-05-07T00:00:00, chargeperiodend: 2026-05-08T00:00:00}
+  expect:
+    adapter:aws:
+      where: {pricingcategory: Committed}
+      sum: 1200.0
+      rows:
+      - {billing_period: "2026-04", effectivecost: 30.0}
+      - {billing_period: "2026-05", effectivecost: 20.0}
+      - {billing_period: "2026-05", effectivecost: 1150.0,
+         chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-06-01T00:00:00}
+
+- name: the report says when a charge stayed whole by design
+  given:
+    vendor_registry: [{vendor: metrics, publisher_like: "metrics co%"}]
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 1.0}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, chargecategory: Purchase, effectivecost: 1200.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2027-04-01T00:00:00}
+  expect:
+    report: {name: vendor_status, rows: [{vendor: metrics, status: kept_whole, kept_whole: 1200.0}]}
+
+- name: the report names registered vendors the bill never showed
+  given:
+    vendor_registry:
+    - {vendor: metrics, publisher_like: "metrics co%"}
+    - {vendor: ghost, publisher_like: "ghost inc%"}
+    vendor_lines: [{vendor: metrics, workspace: ws-a, servicename: Compute, amount: 1.0}]
+    vendor_fetch: [{vendor: metrics}]
+    bill:
+    - {publishername: Metrics Co, first_party: false, effectivecost: 1000.0,
+       chargeperiodstart: 2026-04-01T00:00:00, chargeperiodend: 2026-05-01T00:00:00}
+  expect:
+    report:
+      name: vendor_status
+      rows: [{vendor: metrics, status: split}, {vendor: ghost, status: not_on_bill}]
